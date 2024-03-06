@@ -1,58 +1,70 @@
 package main
 
 import (
-    "fmt"
-    "log"
-    "net/http"
-    "net/http/httputil"
-    "net/url"
-    "strings"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"sync/atomic"
 )
 
+type LoadBalancer interface {
+	NextServer(req *http.Request) string
+}
+
+type RoundRobin struct {
+	addrs       []string
+	reqCounter  uint64
+}
+
+func (rr *RoundRobin) NextServer(req *http.Request) string {
+	counter := atomic.AddUint64(&rr.reqCounter, 1)
+	return rr.addrs[counter%uint64(len(rr.addrs))]
+}
+
+type ProxyHandler struct {
+	loadBalancer LoadBalancer
+	client       *http.Client
+}
+
+func (ph *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	targetAddr := ph.loadBalancer.NextServer(r)
+	targetURL := &url.URL{
+		Scheme: "http",
+		Host:   targetAddr,
+		Path:   r.URL.Path,
+	}
+	r.URL = targetURL
+
+	resp, err := ph.client.Do(r)
+	if err != nil {
+		log.Printf("Error proxying request: %v", err)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	for name, values := range resp.Header {
+		w.Header()[name] = values
+	}
+	w.WriteHeader(resp.StatusCode)
+
+	io.Copy(w, resp.Body)
+}
+
 func main() {
-    servers := []string{"http://localhost:3000", "http://localhost:3001"}
+	addrs := []string{"api01:3000", "api02:3000"}
 
-    mux := http.NewServeMux()
-    for i, server := range servers {
-        target, err := url.Parse(server)
-        if err != nil {
-            log.Fatal("Error parsing server URL:", err)
-        }
-        mux.HandleFunc(fmt.Sprintf("/%d/", i), reverseProxy(target))
-    }
+	roundRobin := &RoundRobin{addrs: addrs}
 
-    port := ":8080"
-    log.Println("Load balancer listening on port", port)
-    if err := http.ListenAndServe(port, mux); err != nil {
-        log.Fatal("Error starting load balancer:", err)
-    }
+	client := &http.Client{}
+
+	http.Handle("/", &ProxyHandler{loadBalancer: roundRobin, client: client})
+
+	port := ":9999"
+	fmt.Println("Proxy server listening on port", port)
+	if err := http.ListenAndServe(port, nil); err != nil {
+		log.Fatal("Error starting proxy server:", err)
+	}
 }
-
-func reverseProxy(target *url.URL) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        director := func(req *http.Request) {
-            req.URL.Scheme = target.Scheme
-            req.URL.Host = target.Host
-            req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
-            req.Header.Set("X-Forwarded-Host", r.Header.Get("Host"))
-            req.Header.Set("X-Forwarded-Proto", r.Header.Get("X-Forwarded-Proto"))
-            req.Header.Set("X-Real-IP", r.RemoteAddr)
-        }
-
-        proxy := &httputil.ReverseProxy{Director: director}
-        proxy.ServeHTTP(w, r)
-    }
-}
-
-func singleJoiningSlash(a, b string) string {
-    aslash := strings.HasSuffix(a, "/")
-    bslash := strings.HasPrefix(b, "/")
-    switch {
-    case aslash && bslash:
-        return a + b[1:]
-    case !aslash && !bslash:
-        return a + "/" + b
-    }
-    return a + b
-}
-
