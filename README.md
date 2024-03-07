@@ -5,9 +5,10 @@ This is a simple proxy server with load balancing capability implemented in Go. 
 
 ## Features
 
-- **Round Robin Load Balancer**: Distributes requests in a circular manner among backend servers.
-- **Proxy Handler**: Manages incoming requests, forwards them to the selected server, and relays responses back to the client.
-- **Custom HTTP Client**: Utilizes a customized HTTP client for making requests to backend servers.
-- **Request Listening**: Listens for HTTP requests and forwards them to backend servers.
-- **Error Handling**: Manages errors during request forwarding and returns a "Bad Gateway" status code if an error occurs.
+- **Round-robin Load Balancing:** The proxy server evenly distributes requests among the listed destination servers.
 
+- **Simultaneous Connections Limit:** A limit on simultaneous connections has been implemented to prevent overload on the proxy server and destination servers. This is achieved using a semaphore to control the maximum number of active connections.
+
+- **HTTP and TCP Proxy:** The proxy server supports both HTTP and TCP connections, allowing for forwarding different types of traffic.
+
+- **Error Logging:** Errors encountered during connection to destination servers or during request forwarding are logged for debugging and monitoring purposes.
